@@ -22,8 +22,10 @@
 2. 在 DSH 的**插件管理器**里安装本插件（官方流程会同时完成包安装与 bundle 选择）：
 
    ```
-   github:smter/dsh-codebase-memory#<commit>
+   github:smter/dsh-codebase-memory#e9f18e1170b2bc34bf95254bdb03aef34d73d99e
    ```
+
+   > 已固定到该 commit；升级时换成新 commit，或改用 tag `v1.0.0`。
 
 3. 重启 `dsh web`。之后 **Settings** 里会出现本插件两个行的选项。
 

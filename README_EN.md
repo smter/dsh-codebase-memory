@@ -23,8 +23,10 @@ The usual failure of a code-graph tool is not "it won't connect", it is "it conn
    package installation and bundle selection):
 
    ```
-   github:smter/dsh-codebase-memory#<commit>
+   github:smter/dsh-codebase-memory#e9f18e1170b2bc34bf95254bdb03aef34d73d99e
    ```
+
+   > Pinned to that commit; switch to a newer commit (or the `v1.0.0` tag) to upgrade.
 
 3. Restart `dsh web`. Its options then appear in **Settings**.
 
