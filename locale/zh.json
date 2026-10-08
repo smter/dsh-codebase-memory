@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Codebase Memory MCP",
+    "description": "把 codebase-memory-mcp 代码图接入 DSH：在决策点提醒模型、纠正失败的 MCP 调用，并自动为未索引的仓库建索引。"
+  }
+}

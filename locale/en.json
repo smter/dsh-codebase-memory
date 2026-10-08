@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Codebase Memory MCP",
+    "description": "Connects the codebase-memory-mcp code graph to DeepSeek Harness: nudges the model at the decision point, corrects failed MCP calls, and indexes repositories by itself."
+  }
+}

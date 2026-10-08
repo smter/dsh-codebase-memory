@@ -1,0 +1,36 @@
+# Codebase Memory MCP for DeepSeek Harness — one bundle, three rows.
+#
+#   codebase-memory-mcp       connects the locally installed `codebase-memory-mcp`
+#                             stdio server; its tools appear to the model as
+#                             mcp__codebase-memory-mcp__<tool>
+#   codebase-memory-reminder  adds one system-prompt section, so the nudge about
+#                             the graph tools is present on every model step
+#   codebase-memory-nudge     watches the real tool pipeline (`.`/hook entry) and
+#                             acts at the decision point: it corrects failed MCP
+#                             calls, nudges on a grep or a long source read, and
+#                             builds the index for an unindexed repository itself
+#
+# Disable the whole bundle to switch all three off. The two plugin rows carry a
+# full Config schema, so their options appear on the DSH **Settings** page and
+# only `enabled` needs to live here; this file deliberately does not restate any
+# default, which keeps `index.js`/`hook.js` the single source of truth.
+
+- insert:
+    - id: codebase-memory-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: codebase-memory-mcp
+        transport: stdio
+        # Resolved from PATH (the client spawns the official StdioClientTransport).
+        # Point this at an absolute path when the executable lives elsewhere, e.g.
+        # /Users/you/.local/bin/codebase-memory-mcp
+        command: codebase-memory-mcp
+        failOnStartupError: true
+
+    - id: codebase-memory-reminder
+      name: dsh-codebase-memory
+      config: {}
+
+    - id: codebase-memory-nudge
+      name: dsh-codebase-memory/hook
+      config: {}
