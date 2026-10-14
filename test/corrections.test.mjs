@@ -33,6 +33,21 @@ const REAL_FAILURES = [
     want: /cursor 是一次性的/,
     repeats: 1,
   },
+  {
+    // Failure A, verbatim from 2026-10-14: the index worker refused to start because a
+    // pre-coordination daemon generation was still alive. Reads kept working, which is
+    // exactly why it was misread as "this repository is not indexed".
+    name: 'mcp__codebase-memory-mcp__index_repository',
+    text: 'CBM index worker could not start: active daemon coordination could not be verified safely',
+    want: /daemon 世代冲突/,
+    repeats: 1,
+  },
+  {
+    name: 'mcp__codebase-memory-mcp__list_projects',
+    text: 'codebase-memory-mcp: CBM CLI could not start because an active pre-coordination or unverified CBM daemon is running. Close all CBM sessions and commands, then retry.',
+    want: /pkill -f "codebase-memory-mcp --cbm-daemon-internal"/,
+    repeats: 1,
+  },
 ];
 
 /** Real successful outputs; none of these may produce a corrective notice. */

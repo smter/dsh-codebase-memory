@@ -31,7 +31,8 @@ The usual failure of a code-graph tool is not "it won't connect", it is "it conn
 3. Restart `dsh web`. Its options then appear in **Settings**.
 
 > If `codebase-memory-mcp` is not on `PATH`, point the `autoIndexCommand` setting and the
-> MCP row's `command` at its absolute path.
+> MCP row's `command` at its absolute path. To also self-heal a stale daemon generation
+> (see **Known limitations**), point both at this repo's `bin/cbm-mcp-preflight`.
 
 ## What you get
 
@@ -88,11 +89,12 @@ pnpm install
 pnpm test
 ```
 
-55 cases, no network and no real index required:
+57 cases, no network and no real index required:
 
 - `test/triggers.test.mjs` — 30 cases: line threshold, source filter (positive and negative), nudge
   cadence, message shape
-- `test/corrections.test.mjs` — 11 cases: correction rules driven by **real server error strings**
+- `test/corrections.test.mjs` — 13 cases: correction rules driven by **real server error strings**
+  (including the two daemon-generation conflicts observed on 2026-10-14)
 - `test/autoindex.test.mjs` — 14 cases: the whole indexing chain and every guard, via a **stub binary**
 
 Set `CBM_DEBUG=1` to see why an automatic index was skipped.
@@ -106,6 +108,26 @@ Set `CBM_DEBUG=1` to see why an automatic index was skipped.
   want, but the main checkout's index does not cover its worktrees or vice versa.
 - `autoIndexMaxFiles` is a **bounded-walk estimate** (it does not read `.gitignore`), so it is a
   coarse guard rather than a precise limit.
+- **A stale daemon generation blocks every write while reads keep succeeding.** After a binary
+  upgrade the previous generation's daemon can still be alive: `index_repository` fails with
+  `active daemon coordination could not be verified safely` (or the CLI refuses to start, citing a
+  `pre-coordination or unverified` daemon), while `list_projects` / `get_file_outline` /
+  `search_graph` all keep working — so it is easily misread as "this repository is not indexed" or
+  "the indexer does not support this language". This repo ships `bin/cbm-mcp-preflight`: it probes
+  once, `exec`s the binary untouched when healthy, and otherwise kills the old daemon, re-probes and
+  `exec`s (probe capped at ~4s; it never blocks the tool surface; every repair is appended to
+  `~/.cache/codebase-memory-mcp/logs/repairs.log`).
+
+  ```sh
+  # Route both the MCP row and automatic indexing through it (do both; the auto-index
+  # spawn is fire-and-forget, so its failure is silent)
+  codebase-memory-mcp.command              = /path/to/bin/cbm-mcp-preflight
+  codebase-memory-nudge.autoIndexCommand   = /path/to/bin/cbm-mcp-preflight
+  ```
+
+  Manual fallback: `pkill -f 'codebase-memory-mcp --cbm-daemon-internal'`, then re-run the same
+  call unchanged (the CLI builds a fresh generation). `codebase-memory-nudge` also recognises both
+  error strings and injects exactly that fix at the failure.
 
 ## License
 

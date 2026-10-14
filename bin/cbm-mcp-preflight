@@ -1,0 +1,153 @@
+#!/bin/bash
+# cbm-mcp-preflight — 启动 codebase-memory-mcp 之前,先清掉「旧 daemon 世代」。
+#
+# 背景(故障 A):二进制升级后,上一世代的 daemon 可能还活着并被复用;新世代的
+# exact-build admission 拒绝与它协作 —— 于是所有写路径(index_repository / CLI)全废,
+# 而读取类调用仍然成功,极易被误判成「索引不支持这个语言」。
+# 症状、判定与手工恢复:本仓库 README 的「已知限制」一节。
+#
+# 用法:把 codebase-memory-mcp 行的 command(以及 codebase-memory-nudge 行的
+# autoIndexCommand)指向本脚本即可 —— 参数与 stdin/stdout 原样透传给真二进制。
+#
+# 行为:探针健康 → 直接 exec(快路径);探针报世代冲突 → 杀掉旧 daemon、重探一次、
+# 再 exec;其它失败/超时 → 只记日志,仍然 exec(绝不挡住工具面)。
+# 永不写 stdout(MCP 的 JSON-RPC 通道),日志只进 repairs.log。
+#
+# 可测性:三个环境变量可覆盖 —— CBM_PREFLIGHT_BIN / CBM_PREFLIGHT_KILL_PATTERN /
+# CBM_PREFLIGHT_LOG,便于用 stub 二进制测修复路径而不碰真实 daemon。
+set -u
+
+# 真二进制:默认走 PATH(与本 bundle 的 cordis.patch.yml 同一口径),用 CBM_PREFLIGHT_BIN 覆盖。
+BIN="${CBM_PREFLIGHT_BIN:-$(command -v codebase-memory-mcp 2>/dev/null || true)}"
+KILL_PATTERN="${CBM_PREFLIGHT_KILL_PATTERN:-codebase-memory-mcp --cbm-daemon-internal}"
+LOG="${CBM_PREFLIGHT_LOG:-$HOME/.cache/codebase-memory-mcp/logs/repairs.log}"
+CONFLICTS="$HOME/.cache/codebase-memory-mcp/logs/daemon-conflicts.ndjson"
+# 探针上限刻意压到 ~4s:健康探针实测 ~0.6s,而 MCP 行 failOnStartupError:true 对启动
+# 延迟敏感。超时也照样 exec(只是这轮不修),所以宁可短。
+PROBE_TICKS=40
+KILL_WAIT_TICKS=50
+
+log() {
+  [ -n "${CBM_PREFLIGHT_NO_LOG:-}" ] && return 0
+  printf "%s cbm-mcp-preflight pid=%s %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$*" >>"$LOG" 2>/dev/null || true
+}
+
+# 0 = 协调健康;2 = 世代冲突(旧 daemon / unverified);1 = 其它失败;3 = 超时
+probe() {
+  local err rc i=0 pid
+  err="$(mktemp 2>/dev/null || echo /tmp/cbm-probe.$$)"
+  # stdin 必须来自 /dev/null:MCP 模式下 wrapper 的 stdin 是 JSON-RPC 通道,
+  # 探针绝不能读走客户端写来的第一个请求。
+  ( "$BIN" cli list_projects </dev/null >/dev/null 2>"$err" ) &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    i=$((i + 1))
+    [ "$i" -ge "$PROBE_TICKS" ] && break
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    rm -f "$err"
+    return 3
+  fi
+  wait "$pid"; rc=$?
+  if [ "$rc" -eq 0 ]; then rm -f "$err"; return 0; fi
+  if grep -qE "could not be verified safely|pre-coordination or unverified|exact-build admission" "$err" 2>/dev/null; then
+    rm -f "$err"
+    return 2
+  fi
+  rm -f "$err"
+  return 1
+}
+
+daemon_pids() { pgrep -f "$KILL_PATTERN" 2>/dev/null || true; }
+
+pid_age_seconds() {
+  local et days rest hh mm ss
+  et="$(ps -o etime= -p "$1" 2>/dev/null | tr -d " ")"
+  [ -z "$et" ] && return 1
+  days=0; rest="$et"
+  case "$et" in *-*) days="${et%%-*}"; rest="${et#*-}" ;; esac
+  hh="${rest%%:*}"; rest="${rest#*:}"
+  mm="${rest%%:*}"; ss="${rest#*:}"
+  echo $(( 10#$days * 86400 + 10#$hh * 3600 + 10#$mm * 60 + 10#$ss ))
+}
+
+binary_age_seconds() {
+  local m
+  m="$(stat -f %m "$BIN" 2>/dev/null || stat -c %Y "$BIN" 2>/dev/null)" || return 1
+  [ -z "$m" ] && return 1
+  echo $(( $(date +%s) - m ))
+}
+
+repair() {
+  local reason="$1" pids p i=0
+  pids="$(daemon_pids)"
+  if [ -z "$pids" ]; then
+    log "repair-skipped reason=$reason no-pid-matched"
+    return 1
+  fi
+  log "repair reason=$reason victims=$(echo $pids | tr '\n' ',') conflicts_tail=$(tail -1 "$CONFLICTS" 2>/dev/null | cut -c1-140)"
+  for p in $pids; do
+    [ "$p" = "$$" ] && continue
+    [ "$p" = "$PPID" ] && continue
+    [ "$p" = "1" ] && continue
+    kill -TERM "$p" 2>/dev/null || true
+  done
+  while [ "$i" -lt "$KILL_WAIT_TICKS" ]; do
+    pgrep -f "$KILL_PATTERN" >/dev/null 2>&1 || break
+    i=$((i + 1))
+    sleep 0.1
+  done
+  if pgrep -f "$KILL_PATTERN" >/dev/null 2>&1; then
+    for p in $(daemon_pids); do
+      [ "$p" = "$$" ] && continue
+      [ "$p" = "$PPID" ] && continue
+      kill -KILL "$p" 2>/dev/null || true
+    done
+    log "repair escalate=SIGKILL reason=$reason"
+  fi
+  return 0
+}
+
+main() {
+  local rc=0 rc2 pids daemon_age bin_age
+  case "$BIN" in *cbm-mcp-preflight*) log "fatal self-reference bin=$BIN"; exit 127 ;; esac
+  if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
+    log "fatal binary-not-executable bin=${BIN:-<empty>}"
+    echo "cbm-mcp-preflight: codebase-memory-mcp not found (set CBM_PREFLIGHT_BIN, or fix the row's command)" >&2
+    exit 127
+  fi
+
+  probe || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    log "ok probe=healthy"
+    exec "$BIN" "$@"
+  fi
+
+  if [ "$rc" -eq 2 ]; then
+    repair "probe=generation-conflict"
+    rc2=0; probe || rc2=$?
+    log "after-repair probe=$rc2"
+  else
+    pids="$(daemon_pids | head -1)"
+    if [ -z "$pids" ]; then
+      log "no-repair probe=$rc no-daemon-running"
+    else
+      daemon_age="$(pid_age_seconds "$pids" || true)"
+      bin_age="$(binary_age_seconds || true)"
+      if [ -n "$daemon_age" ] && [ -n "$bin_age" ] && [ "$daemon_age" -gt "$bin_age" ]; then
+        repair "probe=$rc daemon_age=${daemon_age}s binary_age=${bin_age}s"
+        rc2=0; probe || rc2=$?
+        log "after-repair probe=$rc2"
+      else
+        log "no-repair probe=$rc daemon_age=${daemon_age:-unknown} binary_age=${bin_age:-unknown}"
+      fi
+    fi
+  fi
+
+  exec "$BIN" "$@"
+}
+
+main "$@"

@@ -24,6 +24,10 @@
         # Resolved from PATH (the client spawns the official StdioClientTransport).
         # Point this at an absolute path when the executable lives elsewhere, e.g.
         # /Users/you/.local/bin/codebase-memory-mcp
+        #
+        # To also self-heal a stale daemon generation (see "Known limitations" in the
+        # README), point this at `bin/cbm-mcp-preflight` instead: it probes once, clears
+        # the old generation when needed, and otherwise execs this binary untouched.
         command: codebase-memory-mcp
         failOnStartupError: true
 

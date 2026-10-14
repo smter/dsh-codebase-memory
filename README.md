@@ -30,6 +30,7 @@
 3. 重启 `dsh web`。之后 **Settings** 里会出现本插件两个行的选项。
 
 > `codebase-memory-mcp` 不在 PATH 上时，改设置里的 `autoIndexCommand`，以及 MCP 行的 `command`。
+> 若要顺带自愈「旧 daemon 世代」（见「已知限制」），把这两处指向本仓库自带的 `bin/cbm-mcp-preflight`。
 
 ## 它做什么
 
@@ -78,10 +79,10 @@ pnpm install
 pnpm test
 ```
 
-55 个用例，不需要网络或真实索引：
+57 个用例，不需要网络或真实索引：
 
 - `test/triggers.test.mjs` — 30 例：行数阈值、源码过滤器正反例、提醒节奏、消息形状
-- `test/corrections.test.mjs` — 11 例：用**真实报错文本**驱动纠正规则
+- `test/corrections.test.mjs` — 13 例：用**真实报错文本**驱动纠正规则（含 2026-10-14 的 daemon 世代冲突两条）
 - `test/autoindex.test.mjs` — 14 例：用**桩可执行文件**驱动完整索引链路与全部 guard
 
 设置 `CBM_DEBUG=1` 可看到自动索引被跳过的原因。
@@ -91,6 +92,16 @@ pnpm test
 - **PTC 模式下 Tool SDK 把多数 MCP 工具的参数渲染成 `unknown`**，模型只能靠描述猜参数名。本插件用 system prompt 写明调用签名来绕过；根因在渲染侧，值得上游修。
 - **worktree 会被索引成独立 project**（worktree 里 `.git` 是文件）。这通常正是想要的，但主 checkout 的索引不会自动覆盖 worktree，反之亦然。
 - `autoIndexMaxFiles` 是**有界遍历估算**（不读 `.gitignore`），只是粗粒度护栏。
+- **旧 daemon 世代会锁死一切写入，而读调用照常成功** —— 二进制升级后，上一世代的 `codebase-memory-mcp` daemon 可能仍然活着：`index_repository` 报 `active daemon coordination could not be verified safely`（CLI 则拒绝启动，称存在 `pre-coordination or unverified` daemon），但 `list_projects` / `get_file_outline` / `search_graph` 全部正常返回 —— 因此极易被误判成「这个仓库没被索引 / 索引不支持这个语言」。本仓库自带 `bin/cbm-mcp-preflight`：启动前探一次，健康即原样 `exec`，冲突则杀掉旧 daemon、重探、再 `exec`（探针上限 ~4s，任何情况下都不挡住工具面；每次自愈写 `~/.cache/codebase-memory-mcp/logs/repairs.log`）。
+
+  ```sh
+  # 让 MCP 行与自动索引都走它（两边都要改；自动索引那次 spawn 是静默的）
+  codebase-memory-mcp.command              = /path/to/bin/cbm-mcp-preflight
+  codebase-memory-nudge.autoIndexCommand   = /path/to/bin/cbm-mcp-preflight
+  ```
+
+  手工兜底：`pkill -f 'codebase-memory-mcp --cbm-daemon-internal'`，然后原样重试原调用（CLI 会自建新世代）。
+  `codebase-memory-nudge` 也会在报错文本里认出这两种串，就地注入上面这条修法。
 
 ## License
 

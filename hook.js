@@ -297,6 +297,17 @@ const DEFAULT_CORRECTIONS = [
     match: 'invalid_cursor',
     text: 'cursor 是一次性的快照续传令牌，不能复用也不能改。去掉 cursor，用原来的查询参数重新跑一次，再拿新的 next_cursor 往下翻。',
   },
+  {
+    // 故障案例（2026-10-14，hitomi-viewer）：旧 daemon 世代锁死写路径，而读调用照常成功。
+    // 会话证据：模型（以及当时的代理）把它误判成「这个仓库没被索引 / 索引不支持这个语言」，
+    // 于是去改 mode、重建 project、改用 grep —— 全都无效。纠正必须点名这个诱因。
+    match: 'could not be verified safely',
+    text: '这不是索引缺失，也不是「这个仓库没被索引」—— 是 codebase-memory-mcp 的 daemon 世代冲突：二进制升级后旧世代的 daemon 还活着，新世代的 exact-build admission 拒绝与它协作。写路径（index_repository / CLI）全废，而读调用（list_projects / get_file_outline / search_graph）照常成功，正是这一点在误导你。修：先 pkill -f "codebase-memory-mcp --cbm-daemon-internal"，再原样重试这次调用（CLI 会自建新世代）。不要改 mode、不要重建 project、不要改用 grep 代替图查询。判定与手工恢复见本仓库 README 的「已知限制」一节。',
+  },
+  {
+    match: 'pre-coordination or unverified',
+    text: '同上：旧 daemon 世代锁死了写路径（读调用仍会成功，所以别把它当索引缺失）。pkill -f "codebase-memory-mcp --cbm-daemon-internal" 后原样重试；不要改 index_repository 的 mode，也不要重建 project。',
+  },
 ];
 
 /**
